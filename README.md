@@ -8,3 +8,5 @@ Usage:
 4. Enter the text you want to find.
 5. Wait...
 6. Check result in bobby_search_report.txt
+
+###### Tested only in 1.21.8
