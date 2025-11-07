@@ -1,27 +1,30 @@
+# The code is written entirely by AI.
+
 import os
 import re
 import sys
-# Эта библиотека (NBT) теперь должна быть установлена из форка
+# This library (NBT) should be installed from the fork
+# pip install git+https://github.com/OpenBagTwo/NBT.git
 from nbt.region import RegionFile
 
-# --- ПАРАМЕТРЫ, КОТОРЫЕ МОЖНО МЕНЯТЬ ---
+# --- SCRIPT PARAMETERS ---
+# The script will ASK for the root directory.
+# This filename will be created in the same folder where you run the script.
+OUTPUT_FILENAME = "bobby_search_report.txt"
 
-ROOT_DIR = r"A:\Games\PrismLauncher\instances\БазаППЛ\minecraft\.bobby\play.pepeland.net"
-OUTPUT_FILENAME = "minecraft_search_report.txt"
-
-# --- УТИЛИТА ДЛЯ ИЗВЛЕЧЕНИЯ ID МИРА И ИЗМЕРЕНИЯ ---
+# --- UTILITY: GET WORLD INFO ---
 def get_world_info(file_path):
-    """Извлекает ID мира и имя измерения, предполагая структуру .../WorldID/Dimension/r.x.z.mca"""
+    """Extracts the World ID and Dimension Name, assuming a structure like .../WorldID/Dimension/r.x.z.mca"""
     path_parts = file_path.split(os.sep)
     file_name = path_parts[-1]
     
     world_id = "UnknownID"
     dimension_name = "UnknownDimension"
     
-    # 1. Измерение (Dimension Name) - папка перед файлом
+    # 1. Dimension Name - the folder right before the file
     dimension_name = path_parts[-2] if len(path_parts) >= 2 else "UnknownDimension"
     
-    # 2. ID мира (World ID) - папка перед измерением
+    # 2. World ID - the folder before the dimension
     if len(path_parts) >= 3:
         potential_id = path_parts[-3]
         
@@ -29,6 +32,7 @@ def get_world_info(file_path):
             int(potential_id)
             world_id = potential_id
         except ValueError:
+            # If it's not a number (e.g., "minecraft" or "region"), check one level higher
             if len(path_parts) >= 4:
                 potential_id = path_parts[-4]
                 try:
@@ -37,7 +41,7 @@ def get_world_info(file_path):
                 except ValueError:
                     pass
     
-    # Защита от случая, когда ID не найдено
+    # Failsafe for inconsistent directory structures
     if world_id == "UnknownID":
         if dimension_name.lower() in ['overworld', 'the_nether', 'the_end']:
              world_id = path_parts[-3] if len(path_parts) >= 3 else "UnknownID"
@@ -46,11 +50,12 @@ def get_world_info(file_path):
 
     return world_id, dimension_name, file_name
 
-# --- ФУНКЦИЯ ПОИСКА В ОДНОМ ФАЙЛЕ ---
+# --- CORE FUNCTION: SEARCH MCA FILE ---
 
 def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
     """
-    Сканирует один MCA-файл на наличие указанного текста (обе стороны табличек) и возвращает список совпадений и список ошибок.
+    Scans a single MCA file for the target text (both sign sides)
+    and returns a list of matches and a list of errors.
     """
     world_id, dimension_name, file_name = get_world_info(file_path)
     
@@ -65,15 +70,16 @@ def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
             for cz in range(32):
                 
                 try:
-                    # Ожидаем, что форк NBT корректно читает MUTF-8
+                    # We expect the NBT fork to correctly read MUTF-8
                     chunk = region.get_chunk(cx, cz)
                 except Exception as e:
                     error_message = str(e)
                     
+                    # Silently skip 'Chunk not present' errors
                     if "Chunk" in error_message and "not present" in error_message:
                         continue
                         
-                    # Собираем остальные ошибки
+                    # Collect all other errors
                     region_match = re.search(r"r\.(-?\d+)\.(-?\d+)\.mca", file_name)
                     if region_match:
                          region_x = int(region_match.group(1))
@@ -85,7 +91,7 @@ def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
                          global_z_err = 'N/A'
                     
                     error_reports_file.append(
-                        f"🛑 Чанк [{global_x_err}, {global_z_err}] в {world_id}/{dimension_name}/{file_name}: {e}"
+                        f"🛑 Chunk [{global_x_err}, {global_z_err}] in {world_id}/{dimension_name}/{file_name}: {e}"
                     )
                     continue 
                 
@@ -98,40 +104,42 @@ def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
                     for entity in root_tag['block_entities']:
                         entity_id = str(entity.get('id', 'N/A'))
                         
+                        # Only check signs
                         if entity_id in ['minecraft:sign', 'minecraft:hanging_sign']:
                             
                             all_text = ""
                             raw_messages = []
 
-                            # --- 1. СБОР ТЕКСТА С ПЕРЕДНЕЙ СТОРОНЫ ---
+                            # --- 1. GET FRONT TEXT ---
                             if 'front_text' in entity and 'messages' in entity['front_text']:
-                                raw_messages.append("--- ПЕРЕДНЯЯ СТОРОНА ---")
+                                raw_messages.append("--- FRONT SIDE ---")
                                 for line_tag in entity['front_text']['messages']:
                                     line_content = line_tag.value
                                     
-                                    # --- ИСПРАВЛЕНИЕ: Проверка на None ---
+                                    # --- FIX: Check for None ---
                                     if line_content is None:
-                                        line_content = "" # Заменяем None на пустую строку
-                                    # ------------------------------------
+                                        line_content = "" # Replace None with an empty string
+                                    # -------------------------
                                     
                                     all_text += line_content
                                     raw_messages.append(line_content)
                             
-                            # --- 2. СБОР ТЕКСТА С ЗАДНЕЙ СТОРОНЫ ---
+                            # --- 2. GET BACK TEXT ---
                             if 'back_text' in entity and 'messages' in entity['back_text']:
-                                raw_messages.append("--- ЗАДНЯЯ СТОРОНА ---")
+                                raw_messages.append("--- BACK SIDE ---")
                                 for line_tag in entity['back_text']['messages']:
                                     line_content = line_tag.value
                                     
-                                    # --- ИСПРАВЛЕНИЕ: Проверка на None ---
+                                    # --- FIX: Check for None ---
                                     if line_content is None:
-                                        line_content = "" # Заменяем None на пустую строку
-                                    # ------------------------------------
+                                        line_content = "" # Replace None with an empty string
+                                    # -------------------------
                                     
                                     all_text += line_content
                                     raw_messages.append(line_content)
                                 
                             
+                            # --- CHECK FOR MATCH ---
                             if search_pattern.search(all_text):
                                 
                                 entity_x = entity.get('x', 'N/A').value
@@ -150,8 +158,7 @@ def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
                                 })
         
     except Exception as e:
-        # Эта ошибка (NoneType) больше не должна приводить к "КРИТИЧЕСКОЙ ОШИБКЕ ФАЙЛА"
-        error_reports_file.append(f"❌ КРИТИЧЕСКАЯ ОШИБКА ФАЙЛА {world_id}/{dimension_name}/{file_name}: {e}")
+        error_reports_file.append(f"❌ CRITICAL FILE ERROR {world_id}/{dimension_name}/{file_name}: {e}")
         
     finally:
          if region is not None:
@@ -159,37 +166,40 @@ def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
               
     return found_signs, error_reports_file
 
-# --- ОСНОВНАЯ ФУНКЦИЯ ДЛЯ СКАНИРОВАНИЯ ВСЕХ ФАЙЛОВ ---
+# --- MAIN FUNCTION ---
 
 def multi_world_search(root_dir, target_text, output_file):
     """
-    Рекурсивно ищет все .mca файлы, собирает результаты и выводит сводный отчет в файл.
+    Recursively searches all .mca files, collects results, and writes a summary report.
     """
     
+    # Open the report file (with utf-8 encoding)
     with open(output_file, 'w', encoding='utf-8') as report_writer:
         
         def write_report(message, to_console=True):
-            """Вспомогательная функция для вывода в консоль и записи в файл."""
+            """Helper function to write to both console and file."""
             report_writer.write(message + "\n")
             if to_console:
                 print(message)
                 
         write_report("=" * 70)
-        write_report(f"🔍 Запуск поиска '{target_text}' в директории: {root_dir}")
+        write_report(f"🔍 Starting search for '{target_text}' in directory: {root_dir}")
         write_report("--------------------------------------------------")
 
+        # Compile regex pattern for case-insensitive search
         search_pattern = re.compile(re.escape(target_text), re.IGNORECASE)
         
         total_mca_files = 0
         all_results = [] 
         all_errors = []
         
+        # Walk through all directories and files
         for dirpath, dirnames, filenames in os.walk(root_dir):
             for filename in filenames:
                 if filename.endswith(".mca"):
                     file_path = os.path.join(dirpath, filename)
                     
-                    # Фильтруем файлы по папкам измерений
+                    # Filter to only scan dimension folders
                     if 'overworld' in dirpath.lower() or 'the_nether' in dirpath.lower() or 'the_end' in dirpath.lower():
                         
                         path_parts = dirpath.lower().split(os.sep)
@@ -200,51 +210,63 @@ def multi_world_search(root_dir, target_text, output_file):
                         
                         world_id, dimension_name, file_name = get_world_info(file_path)
                         
-                        # Выводим информацию о сканируемом файле только в консоль, чтобы не перегружать отчет
-                        print(f"--- Сканирование файла: {world_id}/{dimension_name}/{file_name}...", end='\r')
+                        # Show progress in console only
+                        print(f"--- Scanning file: {world_id}/{dimension_name}/{file_name}...", end='\r')
                         
                         found_list, error_list = search_in_mca_file(file_path, target_text, search_pattern, report_writer)
                         
                         all_results.extend(found_list)
                         all_errors.extend(error_list)
         
-        # Очистка консоли после прогресса
+        # Clear the progress line from the console
         print(" " * 80, end='\r')
 
-        write_report("\n" + "=" * 70, to_console=False)
-        write_report(f"Поиск завершён!")
-        write_report(f"  ➡️ Просканировано MCA-файлов: {total_mca_files}")
-        write_report(f"  ➡️ Общее количество совпадений ('{target_text}'): **{len(all_results)}**")
-        write_report(f"  ➡️ Отчет сохранен в файл: **{output_file}**")
+        # --- WRITE FINAL SUMMARY ---
+        write_report("\n" + "=" * 70, to_console=False) # Write to file only
+        write_report(f"🏆 SEARCH COMPLETE!")
+        write_report(f"  ➡️ Scanned MCA files: {total_mca_files}")
+        write_report(f"  ➡️ Total matches found ('{target_text}'): **{len(all_results)}**")
+        write_report(f"  ➡️ Report saved to: **{output_file}**")
         write_report("=" * 70, to_console=False)
         
-        # --- ОТЧЕТ 1: ОШИБКИ ---
+        # --- REPORT 1: ERRORS ---
         if all_errors:
-            write_report("\n*** ОТЧЕТ ОБ ОШИБКАХ ЧТЕНИЯ ЧАНКОВ (кроме 'Chunk not present') ***", to_console=False)
+            write_report("\n*** CHUNK READ ERROR REPORT (excluding 'Chunk not present') ***", to_console=False)
             for err in all_errors:
                 write_report(err, to_console=False)
             write_report("--------------------------------------------------", to_console=False)
 
-        # --- ОТЧЕТ 2: НАЙДЕННЫЕ ТАБЛИЧКИ ---
+        # --- REPORT 2: MATCHES ---
         if all_results:
-            write_report("\n*** СВОДНЫЙ ОТЧЕТ: НАЙДЕННЫЕ ТАБЛИЧКИ ***", to_console=False)
+            write_report("\n*** SUMMARY REPORT: MATCHES FOUND ***", to_console=False)
             for i, res in enumerate(all_results):
                 write_report("-" * 50, to_console=False)
-                write_report(f"  НАХОДКА #{i+1}", to_console=False)
-                write_report(f"  Мир (ID): **{res['world_id']}**", to_console=False)
-                write_report(f"  Измерение/Файл: **{res['dimension']} / {res['file']}**", to_console=False)
-                write_report(f"  Координаты: X:{res['x']}, Y:{res['y']}, Z:{res['z']} ({res['type']})", to_console=False)
-                write_report("  Текст:", to_console=False)
+                write_report(f"  MATCH #{i+1}", to_console=False)
+                write_report(f"  World (ID): **{res['world_id']}**", to_console=False)
+                write_report(f"  Dimension/File: **{res['dimension']} / {res['file']}**", to_console=False)
+                write_report(f"  Coordinates: X:{res['x']}, Y:{res['y']}, Z:{res['z']} ({res['type']})", to_console=False)
+                write_report("  Text:", to_console=False)
                 for line in res['text'].split('\n'):
                      write_report(f"    | {line}", to_console=False)
             write_report("-" * 50, to_console=False)
         else:
-            write_report("\n*** Совпадений не найдено. ***", to_console=False)
+            write_report("\n*** No matches found. ***", to_console=False)
 
-# --- ЗАПУСК ---
+# --- SCRIPT EXECUTION ---
 if __name__ == "__main__":
-    # 1. Ввод искомого слова
-    target_text = input("Введите текст, который нужно найти на табличках: ")
+    
+    # 1. Get the server root folder path
+    print("Please provide the path to the server's root folder.")
+    print(r"Example: C:\PrismLauncher\instances\thebestmodpack\minecraft\.bobby\play.pepeland.net")
+    root_dir_input = input("Enter path: ")
+    
+    # Validate the path
+    if not os.path.isdir(root_dir_input):
+        print(f"Error: Path not found or is not a directory: {root_dir_input}")
+        sys.exit() # Exit the script
 
-    # 2. Запуск основного поиска
-    multi_world_search(ROOT_DIR, target_text, OUTPUT_FILENAME)
+    # 2. Get the search term
+    target_text = input("Enter the text to search for on signs: ")
+
+    # 3. Run the main search function
+    multi_world_search(root_dir_input, target_text, OUTPUT_FILENAME)
