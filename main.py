@@ -1,18 +1,18 @@
 # The code is written entirely by AI.
-
 import os
 import re
 import sys
+import multiprocessing 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 # This library (NBT) should be installed from the fork
 # pip install git+https://github.com/OpenBagTwo/NBT.git
 from nbt.region import RegionFile
 
 # --- SCRIPT PARAMETERS ---
-# The script will ASK for the root directory.
-# This filename will be created in the same folder where you run the script.
 OUTPUT_FILENAME = "bobby_search_report.txt"
 
-# --- UTILITY: GET WORLD INFO ---
+# --- UTILITY: GET WORLD INFO (No changes) ---
 def get_world_info(file_path):
     """Extracts the World ID and Dimension Name, assuming a structure like .../WorldID/Dimension/r.x.z.mca"""
     path_parts = file_path.split(os.sep)
@@ -50,9 +50,8 @@ def get_world_info(file_path):
 
     return world_id, dimension_name, file_name
 
-# --- CORE FUNCTION: SEARCH MCA FILE ---
-
-def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
+# --- CORE FUNCTION: SEARCH MCA FILE (No changes) ---
+def search_in_mca_file(file_path, target_text, search_pattern):
     """
     Scans a single MCA file for the target text (both sign sides)
     and returns a list of matches and a list of errors.
@@ -70,16 +69,13 @@ def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
             for cz in range(32):
                 
                 try:
-                    # We expect the NBT fork to correctly read MUTF-8
                     chunk = region.get_chunk(cx, cz)
                 except Exception as e:
                     error_message = str(e)
                     
-                    # Silently skip 'Chunk not present' errors
                     if "Chunk" in error_message and "not present" in error_message:
                         continue
                         
-                    # Collect all other errors
                     region_match = re.search(r"r\.(-?\d+)\.(-?\d+)\.mca", file_name)
                     if region_match:
                          region_x = int(region_match.group(1))
@@ -104,7 +100,6 @@ def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
                     for entity in root_tag['block_entities']:
                         entity_id = str(entity.get('id', 'N/A'))
                         
-                        # Only check signs
                         if entity_id in ['minecraft:sign', 'minecraft:hanging_sign']:
                             
                             all_text = ""
@@ -115,12 +110,8 @@ def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
                                 raw_messages.append("--- FRONT SIDE ---")
                                 for line_tag in entity['front_text']['messages']:
                                     line_content = line_tag.value
-                                    
-                                    # --- FIX: Check for None ---
                                     if line_content is None:
-                                        line_content = "" # Replace None with an empty string
-                                    # -------------------------
-                                    
+                                        line_content = "" 
                                     all_text += line_content
                                     raw_messages.append(line_content)
                             
@@ -129,12 +120,8 @@ def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
                                 raw_messages.append("--- BACK SIDE ---")
                                 for line_tag in entity['back_text']['messages']:
                                     line_content = line_tag.value
-                                    
-                                    # --- FIX: Check for None ---
                                     if line_content is None:
-                                        line_content = "" # Replace None with an empty string
-                                    # -------------------------
-                                    
+                                        line_content = ""
                                     all_text += line_content
                                     raw_messages.append(line_content)
                                 
@@ -166,11 +153,12 @@ def search_in_mca_file(file_path, target_text, search_pattern, report_writer):
               
     return found_signs, error_reports_file
 
-# --- MAIN FUNCTION ---
 
-def multi_world_search(root_dir, target_text, output_file):
+# --- MAIN FUNCTION (No changes to logic, only acceptance of thread count) ---
+
+def multi_world_search(root_dir, target_text, output_file, max_threads):
     """
-    Recursively searches all .mca files, collects results, and writes a summary report.
+    Recursively searches all .mca files using multithreading, collects results, and writes a summary report.
     """
     
     # Open the report file (with utf-8 encoding)
@@ -183,46 +171,68 @@ def multi_world_search(root_dir, target_text, output_file):
                 print(message)
                 
         write_report("=" * 70)
-        write_report(f"🔍 Starting search for '{target_text}' in directory: {root_dir}")
+        write_report(f"🔍 Starting multithreaded search for '{target_text}' in directory: {root_dir}")
+        write_report(f"⚡️ Using a maximum of **{max_threads}** worker threads.")
         write_report("--------------------------------------------------")
 
         # Compile regex pattern for case-insensitive search
         search_pattern = re.compile(re.escape(target_text), re.IGNORECASE)
         
-        total_mca_files = 0
-        all_results = [] 
-        all_errors = []
+        mca_files_to_scan = []
         
-        # Walk through all directories and files
+        # --- 1. COLLECT ALL FILES TO SCAN ---
         for dirpath, dirnames, filenames in os.walk(root_dir):
+            if not any(dim in dirpath.lower() for dim in ['overworld', 'the_nether', 'the_end']):
+                continue
+                
             for filename in filenames:
                 if filename.endswith(".mca"):
                     file_path = os.path.join(dirpath, filename)
-                    
-                    # Filter to only scan dimension folders
-                    if 'overworld' in dirpath.lower() or 'the_nether' in dirpath.lower() or 'the_end' in dirpath.lower():
-                        
-                        path_parts = dirpath.lower().split(os.sep)
-                        if not any(dim in path_parts for dim in ['overworld', 'the_nether', 'the_end']):
-                             continue
+                    mca_files_to_scan.append(file_path)
 
-                        total_mca_files += 1
-                        
-                        world_id, dimension_name, file_name = get_world_info(file_path)
-                        
-                        # Show progress in console only
-                        print(f"--- Scanning file: {world_id}/{dimension_name}/{file_name}...", end='\r')
-                        
-                        found_list, error_list = search_in_mca_file(file_path, target_text, search_pattern, report_writer)
-                        
-                        all_results.extend(found_list)
-                        all_errors.extend(error_list)
+        total_mca_files = len(mca_files_to_scan)
         
+        if total_mca_files == 0:
+            write_report("\n*** WARNING: No .mca files found in dimension folders. Check ROOT_DIR. ***", to_console=True)
+            return
+
+        all_results = [] 
+        all_errors = []
+        
+        # --- 2. EXECUTE THREADED SEARCH ---
+        
+        # Use ThreadPoolExecutor with the user-defined max_workers
+        with ThreadPoolExecutor(max_workers=max_threads) as executor:
+            
+            # Map the function and its arguments (file_path, target_text, search_pattern) to the executor
+            futures = {executor.submit(search_in_mca_file, file_path, target_text, search_pattern): file_path for file_path in mca_files_to_scan}
+            
+            processed_count = 0
+            
+            # Use as_completed to process results as soon as they are ready
+            for future in as_completed(futures):
+                
+                file_path = futures[future]
+                processed_count += 1
+                
+                world_id, dimension_name, file_name = get_world_info(file_path)
+                
+                # Update progress in console
+                print(f"--- Processed {processed_count}/{total_mca_files} files. Current: {world_id}/{dimension_name}/{file_name}...", end='\r')
+                
+                try:
+                    found_list, error_list = future.result()
+                    all_results.extend(found_list)
+                    all_errors.extend(error_list)
+                except Exception as e:
+                    # Catch any unexpected error that might happen during thread execution
+                    all_errors.append(f"❌ UNEXPECTED THREAD ERROR processing {file_path}: {e}")
+
         # Clear the progress line from the console
         print(" " * 80, end='\r')
 
-        # --- WRITE FINAL SUMMARY ---
-        write_report("\n" + "=" * 70, to_console=False) # Write to file only
+        # --- 3. WRITE FINAL SUMMARY ---
+        write_report("\n" + "=" * 70, to_console=False) 
         write_report(f"🏆 SEARCH COMPLETE!")
         write_report(f"  ➡️ Scanned MCA files: {total_mca_files}")
         write_report(f"  ➡️ Total matches found ('{target_text}'): **{len(all_results)}**")
@@ -252,10 +262,30 @@ def multi_world_search(root_dir, target_text, output_file):
         else:
             write_report("\n*** No matches found. ***", to_console=False)
 
-# --- SCRIPT EXECUTION ---
+# --- SCRIPT EXECUTION (Updated order of input) ---
 if __name__ == "__main__":
     
-    # 1. Get the server root folder path
+    # 1. Determine default thread count
+    default_threads = multiprocessing.cpu_count()
+
+    # 2. Get the thread count from the user (FIRST INPUT)
+    while True:
+        thread_input = input(f"Enter the number of threads (Recommended: {default_threads}, or x2 if fast SSD. press Enter for default): ")
+        if not thread_input:
+            max_threads = default_threads
+            print(f"Using default thread count: {max_threads}")
+            break
+        try:
+            max_threads = int(thread_input)
+            if max_threads < 1:
+                print("Please enter a positive number.")
+            else:
+                break
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+
+    # 3. Get the server root folder path (SECOND INPUT)
+    print("\n---")
     print("Please provide the path to the server's root folder.")
     print(r"Example: C:\PrismLauncher\instances\thebestmodpack\minecraft\.bobby\play.pepeland.net")
     root_dir_input = input("Enter path: ")
@@ -265,8 +295,8 @@ if __name__ == "__main__":
         print(f"Error: Path not found or is not a directory: {root_dir_input}")
         sys.exit() # Exit the script
 
-    # 2. Get the search term
+    # 4. Get the search term
     target_text = input("Enter the text to search for on signs: ")
 
-    # 3. Run the main search function
-    multi_world_search(root_dir_input, target_text, OUTPUT_FILENAME)
+    # 5. Run the main search function
+    multi_world_search(root_dir_input, target_text, OUTPUT_FILENAME, max_threads)
